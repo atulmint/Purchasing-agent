@@ -1,237 +1,220 @@
-# Purchasing Agent
+# AI Purchasing Agent
 
-**Live demo:** https://ai-purchasing-agent-vsun.onrender.com
-(free hosting tier — if it's been idle for 15+ minutes the first load takes
-30-60 seconds to wake up, then it's instant)
+An automated purchasing decision and execution engine for quick-commerce supply chains. The agent evaluates inventory signals, determines optimal purchase quantities, executes authorized orders, and validates post-purchase constraints to prevent stockouts and over-ordering.
 
-A buyer support agent for a quick-commerce purchasing workflow. Given a
-purchasing situation — a system recommendation, a supplier shortfall, a
-demand signal that's moved, or a constraint that blocks the obvious action —
-it gathers the relevant operational data itself, decides what should happen,
-carries out the resulting action within its authority, and then checks that
-the action actually landed the way it expected.
+## 🚀 Overview
 
-It does not assume the recommendation it's handed is correct. That's the
-starting premise of the whole design.
+In fast-paced supply chain environments, automated purchase recommendations can easily fail if underlying conditions change between decision and fulfillment. Stock capacity can shrink, demand can spike, or suppliers may report unexpected shortfalls.
 
-## Why this shape
+This project implements a closed-loop purchasing agent that doesn't just issue purchase orders—it actively verifies constraints before and after taking action. If storage capacity drops or a supplier quantity is updated after an order is placed, the agent detects the conflict, attempts a self-correction within safe thresholds, or routes the decision to a human buyer.
 
-The brief is explicit that the goal isn't a chatbot that answers questions
-about purchasing — it's a system that makes, executes, and validates
-purchasing decisions. So the core of this project isn't a prompt, it's a
-decision loop:
+## ✨ Key Capabilities
+
+- **Automated Order Evaluation:** Evaluates stock recommendations, demand changes, and supplier shortfalls.
+- **Supplier & Constraint Analysis:** Assesses supplier lead times, minimum order quantities (MOQ), unit pricing, and node storage limits.
+- **Rules-Based Decision Engine:** Uses a deterministic policy engine to ensure repeatable, auditable decisions.
+- **Automated Purchase Execution:** Automatically generates and updates purchase orders for compliant, low-risk requests.
+- **Post-Action Validation:** Re-checks storage and budget constraints post-execution to catch unexpected condition changes.
+- **Human Approval Workflow:** Escalates high-cost, high-risk, or non-compliant decisions to a buyer approval queue.
+- **Full Audit Trail:** Logs every perception step, policy factor, action, and validation check for complete operational transparency.
+
+## 🧠 Decision Flow
+
+Instead of relying on standard chat responses, the agent runs a continuous execution loop:
 
 ```
-perceive  → gather inventory, demand, suppliers, budget, storage via tools
-reason    → run the situation through a policy engine, get a decision + why
-act       → create/modify a purchase order, within an autonomy threshold
-validate  → re-check the constraint the decision relied on
-escalate  → hand anything uncertain, large, or failed to a human
+[ Ingest Event ] ➔ [ Fetch Operational Context ] ➔ [ Policy Decision ] ➔ [ Execute PO ] ➔ [ Re-Validate Constraints ]
+                                                                                  │
+                                                                           (If Escalated)
+                                                                                  ▼
+                                                                        [ Buyer Approval Queue ]
 ```
 
-Four scenarios from the brief map onto this loop as different entry points
-into the same two policies:
+1. **Ingest Event:** Receives a purchasing signal (recommendation, shortfall, or demand shift).
+2. **Fetch Context:** Reads live inventory levels, open POs, demand trends, supplier availability, and storage capacity.
+3. **Policy Decision:** Runs deterministic rules to pick the optimal supplier and target quantity.
+4. **Execute PO:** Creates or updates a purchase order if within safety limits.
+5. **Re-Validate Constraints:** Confirms that node capacity and budgets still hold after placing the order.
+6. **Buyer Escalation:** Automatically routes exceptions to a human buyer if constraints or safety thresholds are violated.
 
-| Scenario | Entry point | Policy used |
-|---|---|---|
-| 1 — Recommendation review | standing PO recommendation | `evaluate_purchase` |
-| 2 — Supplier can't fulfil | supplier confirms a partial quantity | `evaluate_shortfall` |
-| 3 — Demand/forecast changed | no recommendation yet, actuals have moved | `evaluate_purchase`, demand re-based on actuals |
-| 4 — Purchasing constraint | recommendation exists, budget/storage won't allow it | `evaluate_purchase`, constraint-bound branch |
+## 🏗️ System Architecture
 
-Reusing one policy for scenarios 1/3/4 isn't a shortcut — a demand spike and
-a tight budget are both just different constraints on the same underlying
-question ("how much should we buy, from whom, right now"), so they belong in
-the same function rather than three copies of similar logic.
-
-## Architecture
+The project consists of a single-page browser UI, a FastAPI REST service, an agent orchestrator, a policy engine, a tools data access layer, and an SQLite database.
 
 ```mermaid
 flowchart TB
-    UI["Browser UI<br/>(situations, trace, approval queue, POs)"]
-    API["FastAPI app<br/>/api/situations, /api/approvals, /api/purchase-orders"]
-    Agent["Agent orchestrator<br/>perceive → reason → act → validate"]
-    Policy["Policy engine<br/>evaluate_purchase / evaluate_shortfall"]
-    Tools["Tools layer<br/>inventory · demand · suppliers · budget · storage · PO ops"]
-    DB[("SQLite<br/>products, suppliers, situations,<br/>purchase_orders, approvals, audit_log")]
-    Human["Buyer<br/>approve / reject"]
+    UI["Browser Dashboard UI"]
+    API["FastAPI Endpoints"]
+    Agent["Agent Orchestrator"]
+    Policy["Policy Decision Engine"]
+    Tools["Tools Layer"]
+    DB[("SQLite Database")]
+    Human["Buyer Approval Queue"]
 
     UI <--> API
     API --> Agent
     Agent --> Policy
     Agent --> Tools
     Tools --> DB
-    Agent -.escalates to.-> Human
+    Agent -.escalates exceptions.-> Human
     Human -.approve/reject.-> API
 ```
 
-**Tech stack**
+Data flows sequentially:
+**Frontend UI** ➔ **FastAPI REST API** ➔ **Agent Orchestrator** ➔ **Policy & Tools Layer** ➔ **SQLite Database** (with exception handling routed to **Human Approval**).
 
-| Layer | Choice |
-|---|---|
-| Language | Python 3.11 |
-| Web framework | FastAPI + Uvicorn |
-| Data | SQLite (stdlib `sqlite3`, no ORM) |
-| Frontend | Vanilla JS / HTML / CSS, single file, no build step |
-| Testing | pytest |
-| Hosting | Render (free web service), deployed straight from this repo |
-| Diagram / reporting | matplotlib + ReportLab (used to generate the PDF write-up, not part of the running app) |
+## 🔧 Core Components
 
-**Backend** — Python, FastAPI, SQLite (stdlib `sqlite3`, no ORM). Seeded from
-`backend/seed_data.json` on every startup, so the demo is reproducible.
+- **Agent Orchestrator (`backend/app/agent.py`):** Coordinates data gathering, policy execution, PO creation, validation checks, and audit logging.
+- **Policy Engine (`backend/app/policy.py`):** Contains pure, deterministic decision logic (`evaluate_purchase` and `evaluate_shortfall`). It returns plain-language explanation factors with zero non-deterministic LLM variance.
+- **Tools Layer (`backend/app/tools.py`):** Provides data helper functions for inventory levels, supplier terms, storage capacity, and purchase order mutations.
+- **SQLite Database (`backend/app/db.py`):** Stores products, suppliers, situations, purchase orders, approval queues, and step-by-step audit logs.
+- **Validation Engine:** Automatically checks if post-execution storage capacity shifted. If capacity fell below order quantity, it attempts an inline quantity reduction down to the supplier MOQ or escalates to the buyer.
+- **Approval System:** Manages pending buyer approvals, allowing human buyers to review full reasoning traces before approving or rejecting orders.
 
-**Frontend** — a single static page (vanilla JS, no build step) served by the
-same FastAPI process. It shows the list of situations, lets you run the
-agent on one, and renders the full reasoning trace, the decision, the
-resulting purchase order, and the validation outcome. A second panel is the
-buyer's approval queue for anything the agent didn't execute on its own.
+## 📊 Example
 
-**Decision engine** — deterministic and rule-based rather than a live model
-call. Every decision returns the list of factors that produced it, in plain
-language, and the same input always produces the same output. For a system
-that commits money and inventory, that auditability and reproducibility
-matters more than the flexibility of free-form reasoning — and it's directly
-testable (`backend/tests/test_scenarios.py`) without needing an API key or
-network access to run. The natural place a model would plug in is the
-"explain this in a paragraph for a specific buyer" step, or interpreting a
-free-text supplier email into the structured shortfall event this agent
-consumes — the tool boundary is designed so either could be added without
-touching the policy engine itself.
+### Self-Correcting Order Workflow
 
-## What the agent can do (tools)
+1. **Initial Signal:** System recommends buying **800 units** of a product.
+2. **Analysis:** The agent reviews current inventory and transit orders, calculating a true requirement of **338 units**.
+3. **Execution:** Storage capacity at the node is **300 units**. Because 300 units is under the **$5,000** auto-approval limit, the agent places a PO for **300 units**.
+4. **Post-Action Shift:** During post-execution validation, the agent detects that concurrent storage reservations reduced available capacity to **260 units**.
+5. **Self-Correction:** The agent verifies that 260 units clears the supplier's MOQ (150 units), automatically updates the PO to **260 units**, and records the self-correction in the audit trail.
 
-- `get_product` / `get_suppliers` / `get_open_purchase_orders` — read inventory, demand history, supplier terms (lead time, MOQ, price, reliability, available quantity), and open orders for a SKU.
-- `read_storage_remaining` — read the shared capacity pool at a node. Deliberately modeled so a second read can return a different number than the first (see below).
-- `create_purchase_order` / `update_purchase_order` — the only way the agent changes what gets bought.
-- `create_approval` — the only way the agent asks a human for a decision.
-- `log` — every perceive/reason/act/validate step is written to an audit trail per situation, which is what the UI's "reasoning trace" renders.
+## 🛡️ Safety & Human-in-the-Loop
 
-## The feedback loop
+The agent is bounded by explicit autonomy guards to maintain financial and operational safety.
 
-This is what the brief asks for most directly, so it's worth spelling out
-with the actual example the seeded data produces (`SIT-1001`):
+### Automatic Execution Conditions
+The agent auto-places or updates purchase orders only when:
+- The decision is `accept` or `modify`.
+- The total order cost is under **$5,000**.
+- Demand history is stable (no unconfirmed demand spikes).
+- Order quantity satisfies supplier MOQ, node storage capacity, and budget.
 
-1. The system recommends 800 units. The agent works out that, given current
-   inventory, one order already in transit, and the fastest supplier's lead
-   time, only ~338 units are actually needed to hold a safe cover window —
-   already well under 800.
-2. Storage is tighter still: only 300 units of capacity are available at the
-   decision node. Storage becomes the binding constraint, so the agent
-   places a PO for 300, not 800, and executes it immediately (300 units is
-   within its auto-approval cost threshold).
-3. At validation time the agent re-reads the storage figure. In the seed
-   data, 40 units of that capacity were reserved by another workflow between
-   the decision and the confirmation check — a stand-in for the everyday
-   case of two systems reading a shared number a moment apart.
-4. The validation step catches that the PO it just placed (300) no longer
-   fits (260 available), and — because 260 still clears the supplier's
-   minimum order of 150 — trims the PO to 260 itself and logs why, rather
-   than leaving an order in place that the buyer never actually saw update.
-   If trimming had gone below the supplier minimum, it escalates instead of
-   silently failing (see `_validate_purchase_order` in `backend/app/agent.py`).
+### Human Escalation Triggers
+The agent halts execution and routes to the buyer approval queue when:
+- Order value exceeds **$5,000**.
+- An unconfirmed demand spike requires human verification.
+- Storage capacity is lower than the supplier's minimum order quantity.
+- A supplier shortfall requires an alternate supplier with a cost premium exceeding thresholds.
 
-The same validate-then-correct-or-escalate shape is what resolves Scenario 2
-(a supplier shortfall is really "validation failed on an existing PO" one
-step earlier in the process) and what stops Scenario 4 from ever placing a
-non-compliant order in the first place.
+## 💻 Tech Stack
 
-## Autonomy boundary — when a human gets involved
+| Layer | Technology | Description |
+|---|---|---|
+| **Backend** | Python 3.11+, FastAPI, Uvicorn | REST API framework & server |
+| **Data Layer** | SQLite (`sqlite3` stdlib) | Relational database (no ORM) |
+| **Frontend** | Vanilla JS, HTML5, CSS3 | Single-page UI with zero build steps |
+| **Testing** | pytest | Integration test suite & scorecard runner |
+| **Deployment** | Render Web Service | Free-tier cloud hosting configuration |
 
-The agent acts on its own when a decision is `accept`/`modify` and:
-- the resulting order cost is under $5,000, **and**
-- demand looks stable (no unconfirmed spike), **and**
-- a compliant quantity (at or above the supplier minimum) exists.
+## 📁 Project Structure
 
-Otherwise it stops short of acting and puts the proposal — with its full
-reasoning — in front of a buyer:
-- a demand spike that's real but only just emerged (not yet sustained 3 days) → `investigate`
-- a demand spike that is sustained → still escalated, on the principle that a
-  step-change in demand deserves a human glance even when the resulting
-  order is cheap
-- no quantity satisfies both the supplier minimum and budget/storage → `escalate`
-- an alternate-supplier premium above 10%, or above the cost threshold, on a
-  shortfall → proposed, not auto-placed
+```
+.
+├── backend/
+│   ├── app/
+│   │   ├── agent.py          # Execution loop & validation logic
+│   │   ├── db.py             # SQLite schema & seed loader
+│   │   ├── main.py           # FastAPI application endpoints
+│   │   ├── policy.py         # Deterministic policy rules
+│   │   ├── tools.py          # Data retrieval & PO helper functions
+│   │   └── __init__.py
+│   ├── tests/
+│   │   ├── evaluate.py       # Standalone decision scorecard runner
+│   │   ├── test_scenarios.py # Pytest integration test suite
+│   │   └── __init__.py
+│   ├── requirements.txt      # Python package dependencies
+│   └── seed_data.json        # Test seed data (products, suppliers, POs)
+├── frontend/
+│   └── index.html            # Dashboard UI & reasoning trace viewer
+├── .env.example              # Environment configuration template
+├── .gitignore                # Git exclusion rules
+├── Purchasing_Agent_Approach.pdf # Architectural overview PDF
+├── README.md                 # Project documentation
+└── render.yaml               # Cloud deployment configuration
+```
 
-This is a judgment call, not a hard rule from the brief — the threshold and
-what counts as "stable" are both constants at the top of
-`backend/app/policy.py` and easy to argue with in either direction.
+## ⚡ Getting Started
 
-## Running it
+### Prerequisites
+- Python 3.11+
+- Git
 
+### Installation & Run
+
+1. **Clone the repository:**
+   ```bash
+   git clone https://github.com/atulmint/Purchasing-agent.git
+   cd Purchasing-agent/backend
+   ```
+
+2. **Create and activate a virtual environment:**
+   - **Linux / macOS:**
+     ```bash
+     python3 -m venv .venv
+     source .venv/bin/activate
+     ```
+   - **Windows (PowerShell):**
+     ```powershell
+     python -m venv .venv
+     .\.venv\Scripts\Activate.ps1
+     ```
+
+3. **Install dependencies:**
+   ```bash
+   pip install -r requirements.txt
+   ```
+
+4. **Launch the server:**
+   ```bash
+   uvicorn app.main:app --reload
+   ```
+
+5. **Open in browser:**
+   Navigate to `http://localhost:8000`. The database automatically seeds from `seed_data.json` on startup.
+
+## 🧪 Testing
+
+The repository includes both unit/integration tests and an evaluation matrix runner.
+
+### Run Integration Tests
 ```bash
 cd backend
-python3 -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt
-uvicorn app.main:app --reload
+python -m pytest tests/ -v
 ```
 
-Open `http://localhost:8000`. The database is re-seeded from
-`seed_data.json` every time the server starts, so it's always in a known
-state. Click a situation, click **Run agent**, and read the trace. Anything
-that lands in the approval queue can be approved or rejected from the same
-page.
-
-No environment variables are required to run the demo — see
-`.env.example` for the one optional hook (a model key that would only affect
-how the natural-language explanation is phrased, described above; it is not
-wired into a live call in this submission).
-
-## Tests and evaluation
-
+### Run Evaluation Scorecard
+Generates a summary report verifying expected decisions, status outcomes, and escalation behavior across all seeded purchasing situations:
 ```bash
 cd backend
-source .venv/bin/activate
-python -m pytest tests/ -v          # unit + integration tests
-python tests/evaluate.py            # scorecard across all seeded situations
+python tests/evaluate.py
 ```
 
-`tests/test_scenarios.py` runs each seeded situation through the real agent
-(not a mock) and asserts on the decision, the resulting status, and — for
-`SIT-1001` — the exact post-validation quantity, so the self-correction
-behaviour above is pinned down by a test, not just a demo. Two additional
-cases are checked directly against the policy layer with synthetic inputs
-that aren't worth seeding a whole UI situation for: a shortfall with no
-alternate supplier available, and a demand blip that hasn't sustained long
-enough to trust yet.
+## 🌐 Demo
 
-`tests/evaluate.py` is the "small set of test scenarios" the brief asks for,
-run as a standalone scorecard rather than folded into pytest, so it reads
-like a report:
+A live demonstration is hosted on Render:
 
-```
-situation  decision            match   status                     match   action  validated  escalated
-SIT-1001   modify              True    resolved_with_adjustment    True    True    True       False
-SIT-1002   accept              True    resolved                    True    True    True       False
-SIT-2001   sourced_alternate   True    resolved                    True    True    True       False
-SIT-3001   recommend_purchase  True    pending_approval             True    False   True       True
-SIT-4001   escalate            True    escalated                   True    False   True       True
-```
+🔗 **[Live Project Demo](https://ai-purchasing-agent-vsun.onrender.com)**
 
-For each situation this checks: was the decision what's expected, did it
-reach the expected status, did it take an action or correctly hold off, did
-validation pass (or correctly fail closed), and did it escalate when it was
-supposed to. That maps directly onto the questions in the brief's evaluation
-section (was the decision correct, did it respect constraints, did it
-validate the result, what happens when the initial action doesn't work).
+*(Note: Free-tier instance may require 30–60 seconds to wake up if inactive).*
 
-## Data model
+## ⚠️ Current Limitations
 
-`backend/seed_data.json` defines 5 products, 7 suppliers, 3 open purchase
-orders, and 5 situations (one per scenario, plus a second recommendation
-that's already well-calibrated, as a contrast to the one that gets
-corrected). Everything is small enough to read end to end in the one file —
-see it for the exact numbers behind each scenario.
+- **Single Node Scope:** Focuses on single-warehouse decisions rather than multi-node network redistribution.
+- **Simulated Data Environment:** Inventory levels, storage capacity, and supplier stock are populated from seed data rather than live enterprise ERP/WMS systems.
+- **Stateless Database Model:** SQLite database re-initializes on startup to guarantee clean, reproducible runs.
 
-## Known limitations
+## 🔮 Possible Next Steps
 
-- Single node, single buyer, no auth — this is a decision-and-execution
-  demo, not a multi-tenant planning platform.
-- Supplier confirmation, budget, and storage are all simulated via seed data
-  rather than live integrations — `backend/app/tools.py` is the seam where
-  real systems would plug in.
-- The "storage drift" that drives the validation-correction demo is
-  seeded per situation rather than genuinely concurrent; the mechanism it's
-  standing in for (two reads of a shared counter racing) is real, the
-  concurrency itself isn't.
-- No persistence across restarts by design — every run starts from the same
-  seed so the scenarios are reproducible on demand.
+- **Live System Integrations:** Add connectors for real-time ERP, WMS, and supplier EDI/API feeds.
+- **Persistent Storage:** Replace SQLite seed-reset pattern with persistent PostgreSQL database support.
+- **Auth & Access Controls:** Implement multi-role access (Buyer, Purchasing Manager, Admin).
+- **LLM-Powered Natural Language Processing:** Integrate an optional LLM interface to parse unstructured supplier email communications and summarize decision traces.
+- **Distributed Concurrency:** Implement distributed locking mechanisms for shared inventory and storage capacity pools.
+
+## 👨‍💻 Project Notes
+
+This project was built to demonstrate a pragmatic engineering approach to supply chain automation: using deterministic policy logic for predictable financial decisions, enforcing post-execution constraint validation, and maintaining a strict human-in-the-loop escalation model for exception cases.
